@@ -1,0 +1,44 @@
+gardener-setup-template:
+  template: 'default'
+  base_definition:
+    repo: 
+      trigger: false
+    repos:
+    - name: 'cc-utils'
+      path: 'gardener/cc-utils'
+      branch: 'master'
+      cfg_name: 'github_com'
+    steps: ~
+  variants:
+    run-pipeline:
+      traits:
+        scheduling:
+          suppress_parallel_execution: true
+        pull-request: ~
+      steps:
+        prepare_pipeline_aws:
+          execute:
+          - prepare_pipeline
+          - aws
+          output_dir: 'aws'
+        pipeline_run_aws:
+          depends: ['prepare_pipeline_aws']
+          inputs:
+            aws: aws_path
+          image: 'eu.gcr.io/gardener-project/gardener/gardener-setup:latest'
+          execute:
+            - pipeline_run
+            - aws
+        prepare_pipeline_openstack:
+          execute:
+          - prepare_pipeline
+          - openstack
+          output_dir: 'openstack'
+        pipeline_run_openstack:
+          depends: ['prepare_pipeline_openstack']
+          inputs:
+            openstack: openstack_path
+          image: 'eu.gcr.io/gardener-project/gardener/gardener-setup:latest'
+          execute:
+            - pipeline_run
+            - openstack

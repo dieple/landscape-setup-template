@@ -1,0 +1,70 @@
+#!/bin/bash -eu
+#
+# Copyright (c) 2018 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+if [[ -z ${SOURCE_PATH:-""} ]]; then
+  export SOURCE_PATH="$(readlink -f $(dirname ${0})/../..)"
+else
+  export SOURCE_PATH="$(readlink -f "${SOURCE_PATH}")"
+fi
+
+echo "[PIPELINE] Beginning of pipeline."
+
+export GEN_PATH=$SOURCE_PATH/gen
+mkdir $GEN_PATH
+export GEN=$(eval "echo $(echo \$$1 | tr '[:lower:]' '[:upper:]')") # evaluates to the value of env variable uppercase($1_PATH)
+mv $GEN/* $GEN_PATH
+export CI_SCRIPTS_PATH=${SOURCE_PATH}/.ci
+mv $GEN_PATH/shoot-creds.yaml $CI_SCRIPTS_PATH
+
+echo "[PIPELINE] Merging landscape yaml files."
+echo "[PIPELINE] Merging landscape_config.yaml ..."
+python $CI_SCRIPTS_PATH/merge.py $GEN_PATH/landscape_config.yaml $SOURCE_PATH/landscape_config.yaml $SOURCE_PATH/landscape_config.yaml $GEN_PATH/mergeinfo_config
+echo "[PIPELINE] Not merging landscape_base.yaml as it isn't changed in the pipeline, just taking the new one ..."
+echo "[PIPELINE] Finished merging landscape yaml files."
+
+source ${SOURCE_PATH}/setup/init.sh
+${SETUP_REPO_PATH}/build_landscape_yaml.sh # re-build landscape yaml
+
+echo "[PIPELINE] Counting resources."
+RESOURCE_COUNT=$($CI_SCRIPTS_PATH/count_resources)
+echo $RESOURCE_COUNT
+echo "[PIPELINE] Finished counting resources."
+
+echo "[PIPELINE] Deploying gardener and dependencies."
+$CI_SCRIPTS_PATH/deploy_gardener
+echo "[PIPELINE] Finished deploying gardener."
+
+echo "[PIPELINE] Creating shoot."
+$CI_SCRIPTS_PATH/create_shoot
+echo "[PIPELINE] Finished creating shoot."
+
+echo "[PIPELINE] Deleting shoot."
+$CI_SCRIPTS_PATH/delete_shoot
+echo "[PIPELINE] Finished deleting shoot."
+
+echo "[PIPELINE] Removing gardener and dependencies."
+$CI_SCRIPTS_PATH/undeploy_gardener
+echo "[PIPELINE] Finished removing gardener."
+
+echo "[PIPELINE] Verifying cleanup (counting resources again)."
+tmp=$($CI_SCRIPTS_PATH/count_resources)
+if [ $RESOURCE_COUNT -ne $tmp ]; then
+    echo "Amount of resources before pipeline run ($RESOURCE_COUNT) doesn't match amount after pipeline run ($tmp)!"
+    exit 1
+fi
+echo "[PIPELINE] Finished verifying cleanup."
+
+echo "[PIPELINE] Pipeline finished!"

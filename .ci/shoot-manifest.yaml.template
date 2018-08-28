@@ -1,0 +1,141 @@
+<%
+import os, yaml, sys
+# import our utility library
+sys.path.insert(0, os.path.join(os.environ["LANDSCAPE_SCRIPTS_HOME"], "lib"))
+import utils
+
+config = yaml.load(open(os.environ['LANDSCAPE_CONFIG']))
+gardener_config=utils.find_by_key_value(config["charts"], "name", "gardener")
+profileName = config["cloud"]["variant"]
+cloudprofile = yaml.load(open(os.path.join(os.environ['LANDSCAPE_STATE_HOME'], "seed-config", "04_cloudprofile-{}.yaml".format(profileName))))
+profileShort = 'os' if profileName == 'openstack' else profileName
+profileLong = 'azure' if profileName == 'az' else profileName
+variantName = "variant_{}".format(profileName)
+creds = yaml.load(open("{}/shoot-creds.yaml".format(os.environ['CI_SCRIPTS_PATH'])))["creds"][profileName]
+addons = {}
+addons.update(config["addons"]["variant_all"] or {})
+addons.update(config["addons"][variantName] or {})
+shootName = "shoot-test"
+shootNamespace = "garden-shoot"
+shootSecret = "shoot-secret"
+shootSecretbinding = "shoot-secretbinding"
+%>---
+## not needed for shoot, but allows to see all shoots in dashboard
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    garden.sapcloud.io/role: admins
+  name: garden-administrators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: garden.sapcloud.io:system:project-member
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${shootNamespace}
+  labels:
+    garden.sapcloud.io/role: project
+    project.garden.sapcloud.io/name: cc-shoot
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${shootSecret}
+  namespace: ${shootNamespace}
+type: Opaque
+data:
+  % for k, v in creds.iteritems():
+  ${k}: "${v}"
+  % endfor
+---
+apiVersion: garden.sapcloud.io/v1beta1
+kind: SecretBinding
+metadata:
+  name: ${shootSecretbinding}
+  namespace: ${shootNamespace}
+  labels:
+    cloudprofile.garden.sapcloud.io/name: ${profileName} # label is only meaningful for Gardener dashboard
+secretRef:
+  name: ${shootSecret}
+  namespace: ${shootNamespace}
+quotas: []
+---
+apiVersion: garden.sapcloud.io/v1beta1
+kind: Shoot
+metadata:
+  name: ${shootName}
+  namespace: ${shootNamespace}
+spec:
+  cloud:
+    profile: ${profileName}
+    region: ${config["authentication"][variantName]["{}_region".format(profileShort)]}
+    secretBindingRef:
+      name: ${shootSecretbinding}
+% if profileName=='aws':
+    aws:
+      networks:
+        vpc: # specify either 'id' or 'cidr'
+        # id: vpc-123456
+          cidr: 10.250.0.0/16
+        internal: ['10.250.112.0/22']
+        public: ['10.250.96.0/22']
+        workers: ['10.250.0.0/19']
+      workers:
+      - name: cpu-worker
+        machineType: m4.large
+        volumeType: gp2
+        volumeSize: 20Gi
+        autoScalerMin: 2
+        autoScalerMax: 2
+% elif profileName=='openstack':
+    openstack:
+      loadBalancerProvider: ${config["misc"]["variant_openstack"]["os_lbaas_provider"]}
+      floatingPoolName: ${config["misc"]["variant_openstack"]["os_fip_pool_name"]}
+      networks:
+      # router:
+      #   id: 1234
+        workers: ['10.250.0.0/19']
+      workers:
+      - name: cpu-worker
+        machineType: medium_2_4
+        autoScalerMin: 2
+        autoScalerMax: 2
+% endif
+      zones: ['${config["seed_config"][variantName]["zones"][0]}']
+  kubernetes:
+    version: 1.10.5
+  dns:
+    provider: aws-route53
+    domain: "${shootName}.${gardener_config["values"]["controller"]["defaultDomains"][0]["domain"]}"
+  maintenance:
+    timeWindow:
+      begin: 220000+0100
+      end: 230000+0100
+    autoUpdate:
+      kubernetesVersion: true
+  backup:
+    schedule: "*/5 * * * *"
+    maximum: 7
+  addons:
+    % for k, v in addons.iteritems():
+    % if "app_name" in v:
+    ${v["app_name"]}:
+    % else:
+    ${k}:
+    % endif
+      enabled: true
+      % if v is not None:
+      % for k2, v2 in v.iteritems():
+      % if k2!="app_name":
+      ${k2}: ${v2}
+      % endif
+      % endfor
+      % endif
+    % endfor
