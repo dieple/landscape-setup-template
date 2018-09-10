@@ -15,7 +15,7 @@
 # limitations under the License.
 
 if [[ -z ${SOURCE_PATH:-""} ]]; then
-  export SOURCE_PATH="$(readlink -f $(dirname ${0})/../..)"
+  export SOURCE_PATH="$(readlink -f $(dirname ${0})/..)"
 else
   export SOURCE_PATH="$(readlink -f "${SOURCE_PATH}")"
 fi
